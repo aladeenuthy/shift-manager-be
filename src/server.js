@@ -5,16 +5,13 @@ import cors from "cors";
 import swaggerUi from "swagger-ui-express";
 import swaggerSpec from "./swagger/swaggerConfig.js";
 import authRouter from "./routes/authentication.router.js";
+import otpAuthRouter from "./routes/auth.router.js";
 import shiftsRouter from "./routes/shifts.router.js";
 import workerRouter from "./routes/worker.router.js";
 import locationRouter from "./routes/location.router.js";
 import { errorHandlerMiddleware } from "./middlewares/error-handler.middleware.js";
 import connectDB from "./db.js";
 import mongoose from "mongoose";
-
-if (process.env.NODE_ENV !== "test") {
-  await connectDB();
-}
 
 const app = express();
 
@@ -25,6 +22,7 @@ app.use(express.json());
 app.use(cors());
 //api endpoints
 app.use("/api/user", authRouter);
+app.use("/api/auth", otpAuthRouter);
 app.use("/api/shifts", shiftsRouter);
 app.use("/api/workers", workerRouter);
 app.use("/api/locations", locationRouter);
@@ -33,10 +31,23 @@ app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 app.use(errorHandlerMiddleware);
 
-app.listen(port, () => console.log(`Listening on localhost:${port}`));
+let server;
+
+const startServer = async () => {
+  await connectDB();
+  server = app.listen(port, () =>
+    console.log(`Listening on localhost:${port}`),
+  );
+  return server;
+};
+
+if (process.env.NODE_ENV !== "test") {
+  await startServer();
+}
 
 const gracefulShutdown = async (signal) => {
   console.log(`${signal}: Shutting down gracefully...`);
+  server?.close();
   await mongoose.disconnect();
 };
 
@@ -65,4 +76,4 @@ process.on("unhandledRejection", async (reason) => {
   process.exit(1);
 });
 
-export { app };
+export { app, startServer };

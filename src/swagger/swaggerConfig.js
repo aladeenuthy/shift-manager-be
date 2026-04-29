@@ -27,6 +27,10 @@ const options = {
         name: "Password",
         description: "Forgot and Reset Password endpoints",
       },
+      {
+        name: "Auth",
+        description: "Email verification and authentication helpers",
+      },
     ],
     components: {
       securitySchemes: {

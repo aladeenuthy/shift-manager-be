@@ -3,6 +3,9 @@ import {
   registerUser,
   loginUser,
   getUser,
+  sendOtp,
+  verifyOtp,
+  resendOtp,
   forgotPassword,
   resetPassword,
   promoteToAdmin,
@@ -60,6 +63,17 @@ const schemaPromoteToAdmin = z.object({
   userId: z.string().nonempty({ error: "user id is required" }).trim(),
 });
 
+const schemaSendOtp = z.object({
+  email: z.email({ error: "invalid email address" }).trim(),
+});
+
+const schemaVerifyOtp = z.object({
+  email: z.email({ error: "invalid email address" }).trim(),
+  otp: z
+    .string({ error: "OTP is required" })
+    .regex(/^\d{6}$/, { error: "OTP must be a 6-digit code" }),
+});
+
 /**
  * Controller to handle user registration
  * @param {Request} req
@@ -114,6 +128,56 @@ const getUserController = async (req, res, next) => {
     /** @type {{id: string}} */
     const validatedData = zodSchemaValidator(schemaGetUser, req.user);
     res.status(200).json(await getUser(validatedData.id));
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Controller to send an email verification OTP
+ * @param {Request} req
+ * @param {Response} res
+ * @param {NextFunction} next
+ */
+const sendOtpController = async (req, res, next) => {
+  try {
+    /** @type {{email: string}} */
+    const validatedData = zodSchemaValidator(schemaSendOtp, req.body);
+    res.status(200).json(await sendOtp(validatedData.email));
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Controller to verify an email verification OTP
+ * @param {Request} req
+ * @param {Response} res
+ * @param {NextFunction} next
+ */
+const verifyOtpController = async (req, res, next) => {
+  try {
+    /** @type {{email: string, otp: string}} */
+    const validatedData = zodSchemaValidator(schemaVerifyOtp, req.body);
+    res
+      .status(200)
+      .json(await verifyOtp(validatedData.email, validatedData.otp));
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Controller to resend an email verification OTP
+ * @param {Request} req
+ * @param {Response} res
+ * @param {NextFunction} next
+ */
+const resendOtpController = async (req, res, next) => {
+  try {
+    /** @type {{email: string}} */
+    const validatedData = zodSchemaValidator(schemaSendOtp, req.body);
+    res.status(200).json(await resendOtp(validatedData.email));
   } catch (error) {
     next(error);
   }
@@ -183,6 +247,9 @@ export {
   registerUserController,
   loginUserController,
   getUserController,
+  sendOtpController,
+  verifyOtpController,
+  resendOtpController,
   forgotPasswordController,
   resetPasswordController,
   promoteToAdminController,

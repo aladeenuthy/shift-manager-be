@@ -4,6 +4,7 @@ import mongoose from "mongoose";
 import dotenv from "dotenv";
 import * as process from "node:process";
 import { MongoMemoryServer } from "mongodb-memory-server";
+import bcrypt from "bcrypt";
 import { app } from "../src/server.js";
 import UserModel from "../src/models/user.model.js";
 dotenv.config();
@@ -316,6 +317,140 @@ describe("Authentication API", () => {
 
       expect(res.status).to.equal(400);
       expect(res.body).to.have.property("message");
+    });
+  });
+
+  describe("Email OTP API", () => {
+    const userData = {
+      name: "Test User",
+      email: "test@example.com",
+      password: "TestPass123!",
+    };
+
+    beforeEach(async () => {
+      await request(app).post("/api/user/register").send(userData);
+    });
+
+    describe("POST /api/auth/send-otp", () => {
+      it("should send an OTP to an existing user's email", async () => {
+        const res = await request(app)
+          .post("/api/auth/send-otp")
+          .send({ email: userData.email })
+          .expect(200);
+
+        expect(res.body).to.deep.equal({
+          success: true,
+          message: `OTP sent to ${userData.email}`,
+        });
+
+        const user = await UserModel.findOne({ email: userData.email });
+        expect(user.otpHash).to.be.a("string");
+        expect(user.otpHash).to.not.equal(null);
+        expect(user.otpExpiry).to.be.instanceOf(Date);
+        expect(user.otpLastSentAt).to.be.instanceOf(Date);
+        expect(user.isEmailVerified).to.equal(false);
+      });
+
+      it("should return USER_NOT_FOUND for a missing user", async () => {
+        const res = await request(app)
+          .post("/api/auth/send-otp")
+          .send({ email: "missing@example.com" })
+          .expect(404);
+
+        expect(res.body.message).to.equal("User not found");
+        expect(res.body.errorCode).to.equal("USER_NOT_FOUND");
+      });
+    });
+
+    describe("POST /api/auth/verify-otp", () => {
+      beforeEach(async () => {
+        const user = await UserModel.findOne({ email: userData.email });
+        user.otpHash = await bcrypt.hash("123456", 10);
+        user.otpExpiry = new Date(Date.now() + 5 * 60 * 1000);
+        await user.save();
+      });
+
+      it("should verify a valid OTP and return a JWT", async () => {
+        const res = await request(app)
+          .post("/api/auth/verify-otp")
+          .send({ email: userData.email, otp: "123456" })
+          .expect(200);
+
+        expect(res.body.success).to.equal(true);
+        expect(res.body.message).to.equal("Email verified successfully");
+        expect(res.body).to.have.property("token");
+        expect(res.body.user.email).to.equal(userData.email);
+        expect(res.body.user.isEmailVerified).to.equal(true);
+
+        const user = await UserModel.findOne({ email: userData.email });
+        expect(user.isEmailVerified).to.equal(true);
+        expect(user.otpHash).to.equal(null);
+        expect(user.otpExpiry).to.equal(null);
+      });
+
+      it("should return INVALID_OTP for an incorrect OTP", async () => {
+        const res = await request(app)
+          .post("/api/auth/verify-otp")
+          .send({ email: userData.email, otp: "654321" })
+          .expect(400);
+
+        expect(res.body.message).to.equal("Invalid or expired OTP");
+        expect(res.body.errorCode).to.equal("INVALID_OTP");
+      });
+
+      it("should return INVALID_OTP for an expired OTP", async () => {
+        const user = await UserModel.findOne({ email: userData.email });
+        user.otpExpiry = new Date(Date.now() - 60 * 1000);
+        await user.save();
+
+        const res = await request(app)
+          .post("/api/auth/verify-otp")
+          .send({ email: userData.email, otp: "123456" })
+          .expect(400);
+
+        expect(res.body.message).to.equal("Invalid or expired OTP");
+        expect(res.body.errorCode).to.equal("INVALID_OTP");
+      });
+
+      it("should return USER_NOT_FOUND for a missing user", async () => {
+        const res = await request(app)
+          .post("/api/auth/verify-otp")
+          .send({ email: "missing@example.com", otp: "123456" })
+          .expect(404);
+
+        expect(res.body.message).to.equal("User not found");
+        expect(res.body.errorCode).to.equal("USER_NOT_FOUND");
+      });
+    });
+
+    describe("POST /api/auth/resend-otp", () => {
+      it("should rate-limit resend requests to once every 30 seconds", async () => {
+        await request(app)
+          .post("/api/auth/send-otp")
+          .send({ email: userData.email })
+          .expect(200);
+
+        const rateLimitedRes = await request(app)
+          .post("/api/auth/resend-otp")
+          .send({ email: userData.email })
+          .expect(429);
+
+        expect(rateLimitedRes.body.errorCode).to.equal("OTP_RATE_LIMITED");
+
+        const user = await UserModel.findOne({ email: userData.email });
+        user.otpLastSentAt = new Date(Date.now() - 31 * 1000);
+        await user.save();
+
+        const res = await request(app)
+          .post("/api/auth/resend-otp")
+          .send({ email: userData.email })
+          .expect(200);
+
+        expect(res.body).to.deep.equal({
+          success: true,
+          message: `OTP sent to ${userData.email}`,
+        });
+      });
     });
   });
 

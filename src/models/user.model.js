@@ -12,6 +12,16 @@ const userSchema = new mongoose.Schema({
   },
   passwordResetTokenHash: { type: String, required: false },
   passwordResetTokenExpiry: { type: Date, required: false },
+  otpHash: { type: String, required: false },
+  otpExpiry: { type: Date, required: false },
+  otpLastSentAt: { type: Date, required: false },
+  isEmailVerified: { type: Boolean, default: false },
+  phone: { type: String, required: false },
+  city: { type: String, required: false },
+  jobRole: { type: String, required: false },
+  skills: [{ type: String }],
+  profilePictureUrl: { type: String, default: null },
+  isProfileComplete: { type: Boolean, default: false },
 });
 
 const UserModel = mongoose.model("User", userSchema);

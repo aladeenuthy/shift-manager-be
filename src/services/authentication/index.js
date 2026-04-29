@@ -8,6 +8,9 @@ import { sendEmail } from "../../utils/email.js";
 import { ValidationError } from "../../utils/errors/validation.error.js";
 import { getCurrentDateTime, addTime, isAfter } from "../../utils/datetime.js";
 
+const OTP_EXPIRY_MINUTES = 5;
+const OTP_RESEND_COOLDOWN_SECONDS = 30;
+
 /**
  * Create JWT token for user using userId as payload
  * @param {string} userId
@@ -17,6 +20,47 @@ const createJWTToken = (userId) => {
   return jwt.sign({ id: userId }, process.env.JWT_SECRET, {
     expiresIn: 3 * 24 * 60 * 60,
   });
+};
+
+/**
+ * Format user document for API responses
+ * @param {Object} user
+ * @returns {{id: string, name: string, email: string, role: string, isEmailVerified: boolean}}
+ */
+const formatUserForResponse = (user) => ({
+  id: user._id,
+  name: user.name,
+  email: user.email,
+  role: user.role,
+  isEmailVerified: user.isEmailVerified,
+});
+
+/**
+ * Generate a random 6-digit OTP
+ * @returns {string}
+ */
+const generateOtp = () => {
+  return crypto.randomInt(100000, 1000000).toString();
+};
+
+/**
+ * Send a fresh OTP to a user
+ * @param {Object} user - User document
+ * @returns {Promise<void>}
+ */
+const createAndSendOtp = async (user) => {
+  const otp = generateOtp();
+  const salt = await bcrypt.genSalt(10);
+  user.otpHash = await bcrypt.hash(otp, salt);
+  user.otpExpiry = addTime(getCurrentDateTime(), OTP_EXPIRY_MINUTES, "minute");
+  user.otpLastSentAt = getCurrentDateTime();
+  await user.save();
+
+  await sendEmail(
+    user.email,
+    "ORTA - Email Verification OTP",
+    `<h1>ORTA - Email Verification</h1><p>Your verification code is <strong>${otp}</strong>.</p><p>This code expires in ${OTP_EXPIRY_MINUTES} minutes.</p>`,
+  );
 };
 
 /**
@@ -45,12 +89,7 @@ const registerUser = async (name, email, password) => {
   const token = createJWTToken(user._id);
   return {
     token,
-    user: {
-      id: user._id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-    },
+    user: formatUserForResponse(user),
   };
 };
 
@@ -83,12 +122,7 @@ const loginUser = async (email, password) => {
   const token = createJWTToken(user._id);
   return {
     token,
-    user: {
-      id: user._id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-    },
+    user: formatUserForResponse(user),
   };
 };
 
@@ -109,12 +143,120 @@ const getUser = async (id) => {
   }
 
   return {
-    user: {
-      id: user._id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-    },
+    user: formatUserForResponse(user),
+  };
+};
+
+/**
+ * Send an email verification OTP to an existing user
+ * @param {string} email
+ * @returns {Promise<{success: boolean, message: string}>}
+ * @throws {AppError} If user does not exist
+ */
+const sendOtp = async (email) => {
+  const user = await UserModel.findOne({ email });
+
+  if (!user) {
+    throw new AppError({
+      message: "User not found",
+      statusCode: 404,
+      errorCode: "USER_NOT_FOUND",
+    });
+  }
+
+  await createAndSendOtp(user);
+
+  return {
+    success: true,
+    message: `OTP sent to ${email}`,
+  };
+};
+
+/**
+ * Resend an email verification OTP, rate-limited per user
+ * @param {string} email
+ * @returns {Promise<{success: boolean, message: string}>}
+ * @throws {AppError} If user does not exist or resend is too soon
+ */
+const resendOtp = async (email) => {
+  const user = await UserModel.findOne({ email });
+
+  if (!user) {
+    throw new AppError({
+      message: "User not found",
+      statusCode: 404,
+      errorCode: "USER_NOT_FOUND",
+    });
+  }
+
+  if (user.otpLastSentAt) {
+    const nextAllowedAt = addTime(
+      user.otpLastSentAt,
+      OTP_RESEND_COOLDOWN_SECONDS,
+      "second",
+    );
+
+    if (isAfter(nextAllowedAt, getCurrentDateTime())) {
+      throw new AppError({
+        message: "Please wait 30 seconds before requesting another OTP",
+        statusCode: 429,
+        errorCode: "OTP_RATE_LIMITED",
+      });
+    }
+  }
+
+  await createAndSendOtp(user);
+
+  return {
+    success: true,
+    message: `OTP sent to ${email}`,
+  };
+};
+
+/**
+ * Verify a user's email verification OTP
+ * @param {string} email
+ * @param {string} otp
+ * @returns {Promise<{success: boolean, message: string, token: string, user: {id: string, name: string, email: string, role: string}}>}
+ * @throws {AppError} If user does not exist
+ * @throws {ValidationError} If OTP is invalid or expired
+ */
+const verifyOtp = async (email, otp) => {
+  const user = await UserModel.findOne({ email });
+
+  if (!user) {
+    throw new AppError({
+      message: "User not found",
+      statusCode: 404,
+      errorCode: "USER_NOT_FOUND",
+    });
+  }
+
+  const isOtpExpired =
+    !user.otpExpiry || isAfter(getCurrentDateTime(), user.otpExpiry);
+  const isOtpValid =
+    user.otpHash && !isOtpExpired && (await bcrypt.compare(otp, user.otpHash));
+
+  if (!isOtpValid) {
+    throw new ValidationError({
+      message: "Invalid or expired OTP",
+      errorCode: "INVALID_OTP",
+    });
+  }
+
+  user.isEmailVerified = true;
+  user.otpHash = null;
+  user.otpExpiry = null;
+  user.otpLastSentAt = null;
+  await user.save();
+
+  const token = createJWTToken(user._id);
+
+  return {
+    success: true,
+    message: "Email verified successfully",
+    token,
+    user: formatUserForResponse(user),
   };
 };
 
@@ -233,12 +375,7 @@ const promoteToAdmin = async (userId) => {
   await user.save();
 
   return {
-    user: {
-      id: user._id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-    },
+    user: formatUserForResponse(user),
   };
 };
 
@@ -246,6 +383,9 @@ export {
   registerUser,
   loginUser,
   getUser,
+  sendOtp,
+  verifyOtp,
+  resendOtp,
   forgotPassword,
   resetPassword,
   promoteToAdmin,
