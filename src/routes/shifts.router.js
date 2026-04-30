@@ -11,6 +11,9 @@ import {
   clockOutController,
   getAllShiftsController,
   getUserShiftsController,
+  getMarketplaceShiftsController,
+  claimShiftController,
+  verifyShiftLocationController,
   getShiftController,
 } from "../controllers/shifts.controller.js";
 
@@ -158,6 +161,51 @@ router.get(
  *         description: Internal server error
  */
 router.get("/my-shifts", requireAuthMiddleware, getUserShiftsController);
+/**
+ * @swagger
+ * /shifts/marketplace:
+ *   get:
+ *     summary: Get open marketplace shifts
+ *     tags: [Shifts]
+ *     security:
+ *       - bearerAuth: []
+ *     description: Retrieve scheduled, unassigned shifts available to claim
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           default: 1
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 10
+ *       - in: query
+ *         name: role
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: date
+ *         schema:
+ *           type: string
+ *           format: date
+ *       - in: query
+ *         name: typeOfShift
+ *         schema:
+ *           type: string
+ *           enum: [Weekend, Weekday, Evening, Morning, Night]
+ *     responses:
+ *       200:
+ *         description: Paginated marketplace shifts
+ *       401:
+ *         description: Unauthorized - invalid or missing token
+ */
+router.get(
+  "/marketplace",
+  requireAuthMiddleware,
+  getMarketplaceShiftsController,
+);
 /**
  * @swagger
  * /shifts:
@@ -565,6 +613,82 @@ router.put(
  *         description: Internal server error
  */
 router.get("/:id", requireAuthMiddleware, getShiftController);
+/**
+ * @swagger
+ * /shifts/{id}/claim:
+ *   patch:
+ *     summary: Claim an open marketplace shift
+ *     tags: [Shifts]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Shift ID
+ *     responses:
+ *       200:
+ *         description: Shift claimed successfully
+ *       400:
+ *         description: Shift already claimed or not available
+ *       401:
+ *         description: Unauthorized - invalid or missing token
+ *       403:
+ *         description: Forbidden - worker access required
+ *       404:
+ *         description: Shift not found
+ */
+router.patch("/:id/claim", requireAuthMiddleware, claimShiftController);
+/**
+ * @swagger
+ * /shifts/{id}/verify-location:
+ *   post:
+ *     summary: Verify worker location is within shift geofence
+ *     tags: [Shifts]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Shift ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - latitude
+ *               - longitude
+ *             properties:
+ *               latitude:
+ *                 type: number
+ *                 example: 51.5074
+ *               longitude:
+ *                 type: number
+ *                 example: -0.1276
+ *     responses:
+ *       200:
+ *         description: Location verified
+ *       400:
+ *         description: Outside geofence or validation failed
+ *       401:
+ *         description: Unauthorized - invalid or missing token
+ *       403:
+ *         description: Forbidden - worker access required
+ *       404:
+ *         description: Shift not found
+ */
+router.post(
+  "/:id/verify-location",
+  requireAuthMiddleware,
+  verifyShiftLocationController,
+);
 /**
  * @swagger
  * /shifts/{id}:

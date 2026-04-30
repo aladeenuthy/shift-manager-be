@@ -9,6 +9,9 @@ import {
   clockOutShift,
   getAllShifts,
   getUserShifts,
+  getMarketplaceShifts,
+  claimShift,
+  verifyShiftLocation,
   getShift,
 } from "../services/shift/index.js";
 import { z } from "zod";
@@ -109,7 +112,7 @@ const schemaCreateShift = z.object({
       },
     )
     .min(1, { error: "At least one shift type is required" }),
-  user: objectIdValidator("Invalid user ID"),
+  user: objectIdValidator("Invalid user ID").nullable().optional(),
   startTime: timeValidator,
   finishTime: timeValidator,
   numOfShiftsPerDay: z
@@ -146,7 +149,7 @@ const schemaBatchShift = z.object({
       },
     )
     .min(1, { error: "At least one shift type is required" }),
-  user: objectIdValidator("Invalid user ID"),
+  user: objectIdValidator("Invalid user ID").nullable().optional(),
   startTime: timeValidator,
   finishTime: timeValidator,
   numOfShiftsPerDay: z
@@ -298,6 +301,76 @@ const paginationQuerySchema = z
     return result;
   });
 
+const marketplaceQuerySchema = paginationQuerySchema.and(
+  z.object({
+    role: z
+      .any()
+      .optional()
+      .transform((val) => {
+        if (
+          val === undefined ||
+          val === null ||
+          val === "" ||
+          typeof val !== "string"
+        ) {
+          return undefined;
+        }
+        return val;
+      }),
+    date: z
+      .any()
+      .optional()
+      .transform((val) => {
+        if (
+          val === undefined ||
+          val === null ||
+          val === "" ||
+          typeof val !== "string"
+        ) {
+          return undefined;
+        }
+        return val;
+      })
+      .refine(
+        (val) => {
+          return val === undefined || dayjs(val).isValid();
+        },
+        { error: "Date must be a valid ISO date string" },
+      ),
+    typeOfShift: z
+      .any()
+      .optional()
+      .transform((val) => {
+        if (
+          val === undefined ||
+          val === null ||
+          val === "" ||
+          typeof val !== "string"
+        ) {
+          return undefined;
+        }
+        return val;
+      })
+      .refine(
+        (val) => {
+          return val === undefined || Object.values(SHIFT_TYPES).includes(val);
+        },
+        { error: "Invalid shift type" },
+      ),
+  }),
+);
+
+const schemaVerifyLocation = z.object({
+  latitude: z
+    .number({ error: "Latitude must be a number" })
+    .min(-90, { error: "Latitude must be between -90 and 90" })
+    .max(90, { error: "Latitude must be between -90 and 90" }),
+  longitude: z
+    .number({ error: "Longitude must be a number" })
+    .min(-180, { error: "Longitude must be between -180 and 180" })
+    .max(180, { error: "Longitude must be between -180 and 180" }),
+});
+
 /**
  * Controller to handle shift creation
  * @param {Request} req
@@ -418,6 +491,74 @@ const getUserShiftsController = async (req, res, next) => {
 };
 
 /**
+ * Controller to handle fetching open marketplace shifts
+ * @param {Request} req
+ * @param {Response} res
+ * @param {NextFunction} next
+ */
+const getMarketplaceShiftsController = async (req, res, next) => {
+  try {
+    const options = zodSchemaValidator(marketplaceQuerySchema, req.query);
+    res.status(200).json(await getMarketplaceShifts(options));
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Controller to handle worker shift claiming
+ * @param {Request} req
+ * @param {Response} res
+ * @param {NextFunction} next
+ */
+const claimShiftController = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user?.id || req.user?._id;
+
+    zodSchemaValidator(objectIdValidator("Invalid shift ID"), id);
+
+    res.status(200).json(await claimShift(id, userId));
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Controller to handle server-side shift location verification
+ * @param {Request} req
+ * @param {Response} res
+ * @param {NextFunction} next
+ */
+const verifyShiftLocationController = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user?.id || req.user?._id;
+
+    zodSchemaValidator(objectIdValidator("Invalid shift ID"), id);
+    const coordinates = zodSchemaValidator(schemaVerifyLocation, req.body);
+    const verification = await verifyShiftLocation(id, userId, coordinates);
+
+    if (!verification.withinRange) {
+      return res.status(400).json({
+        success: false,
+        data: verification,
+        error: "You are not within the required distance of the shift location",
+        code: "OUTSIDE_GEOFENCE",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: verification,
+      message: "Location verified",
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
  * Controller to handle shift cancellation
  * @param {Request} req
  * @param {Response} res
@@ -505,5 +646,8 @@ export {
   clockOutController,
   getAllShiftsController,
   getUserShiftsController,
+  getMarketplaceShiftsController,
+  claimShiftController,
+  verifyShiftLocationController,
   getShiftController,
 };

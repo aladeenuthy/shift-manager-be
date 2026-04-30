@@ -12,6 +12,127 @@ import {
 } from "../../utils/datetime.js";
 import { createOrUpdateLocation } from "../location/index.js";
 
+const GEOFENCE_RADIUS_METERS = Number(
+  process.env.GEOFENCE_RADIUS_METERS || 200,
+);
+
+/**
+ * Verify user exists and has worker role
+ * @param {string} userId - User ID
+ * @returns {Promise<Object>} Worker user document
+ * @throws {AppError} If user is not found or is not a worker
+ */
+const getWorkerById = async (userId) => {
+  const worker = await UserModel.findById(userId);
+
+  if (!worker) {
+    throw new AppError({
+      message: "User not found",
+      statusCode: 404,
+      errorCode: "USER_NOT_FOUND",
+    });
+  }
+
+  if (worker.role !== "worker") {
+    throw new AppError({
+      message: "Worker access required",
+      statusCode: 403,
+      errorCode: "WORKER_ROLE_REQUIRED",
+    });
+  }
+
+  return worker;
+};
+
+/**
+ * Calculate distance between two coordinates using Haversine formula
+ * @param {number} latitude1
+ * @param {number} longitude1
+ * @param {number} latitude2
+ * @param {number} longitude2
+ * @returns {number} Distance in meters
+ */
+const calculateDistanceMeters = (
+  latitude1,
+  longitude1,
+  latitude2,
+  longitude2,
+) => {
+  const earthRadiusMeters = 6371000;
+  const toRadians = (degrees) => (degrees * Math.PI) / 180;
+  const deltaLatitude = toRadians(latitude2 - latitude1);
+  const deltaLongitude = toRadians(longitude2 - longitude1);
+
+  const a =
+    Math.sin(deltaLatitude / 2) * Math.sin(deltaLatitude / 2) +
+    Math.cos(toRadians(latitude1)) *
+      Math.cos(toRadians(latitude2)) *
+      Math.sin(deltaLongitude / 2) *
+      Math.sin(deltaLongitude / 2);
+
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return Math.round(earthRadiusMeters * c);
+};
+
+/**
+ * Get UTC day range for a date string or Date
+ * @param {string | Date} value - Date value
+ * @returns {{startOfDay: Date, endOfDay: Date}} UTC day range
+ */
+const getUtcDayRange = (value) => {
+  let year;
+  let month;
+  let day;
+
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    [year, month, day] = value.split("-").map(Number);
+    month -= 1;
+  } else {
+    const date = new Date(value);
+    year = date.getUTCFullYear();
+    month = date.getUTCMonth();
+    day = date.getUTCDate();
+  }
+
+  const startOfDay = new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
+  const endOfDay = new Date(Date.UTC(year, month, day + 1, 0, 0, 0, 0));
+
+  return { startOfDay, endOfDay };
+};
+
+/**
+ * Get the current UTC day start
+ * @returns {Date} Start of today in UTC
+ */
+const getUtcTodayStart = () => {
+  const now = new Date();
+  return new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+  );
+};
+
+/**
+ * Build the marketplace-visible shift start datetime from shift date + start time
+ * @param {Object} shift - Mongoose shift document
+ * @returns {Date} Local datetime matching API date and HH:MM display
+ */
+const getMarketplaceVisibleStartDateTime = (shift) => {
+  const date = new Date(shift.date);
+  const [hours, minutes] = formatTimeString(shift.startTime)
+    .split(":")
+    .map(Number);
+
+  return new Date(
+    date.getUTCFullYear(),
+    date.getUTCMonth(),
+    date.getUTCDate(),
+    hours,
+    minutes,
+    0,
+    0,
+  );
+};
+
 /**
  * Format a single shift object for API response
  * @param {Object} shift - Mongoose shift document
@@ -124,7 +245,7 @@ const getShiftsWithPagination = async (baseQuery = {}, options = {}) => {
  * @param {string} shiftData.title - Shift title
  * @param {string} shiftData.role - Shift role
  * @param {string[]} [shiftData.typeOfShift] - Array of shift types
- * @param {string} shiftData.user - User ID
+ * @param {string} [shiftData.user] - User ID
  * @param {string} shiftData.startTime - Start time of the shift
  * @param {string} shiftData.finishTime - Finish time of the shift
  * @param {number} [shiftData.numOfShiftsPerDay] - Number of shifts per day (default: 1)
@@ -135,7 +256,7 @@ const getShiftsWithPagination = async (baseQuery = {}, options = {}) => {
  * @param {Object} shiftData.location.cordinates - Location coordinates
  * @param {Date} shiftData.date - Date of the shift
  * @returns {Promise<Object>} Created shift with populated user and location data
- * @throws {AppError} If user does not exist
+ * @throws {AppError} If assigned user does not exist
  * @throws {ValidationError} If validation fails
  */
 const createShift = async (shiftData) => {
@@ -151,13 +272,15 @@ const createShift = async (shiftData) => {
     date,
   } = shiftData;
 
-  const userExists = await UserModel.findById(user);
-  if (!userExists) {
-    throw new AppError({
-      message: "User not found",
-      statusCode: 404,
-      errorCode: "USER_NOT_FOUND",
-    });
+  if (user) {
+    const userExists = await UserModel.findById(user);
+    if (!userExists) {
+      throw new AppError({
+        message: "User not found",
+        statusCode: 404,
+        errorCode: "USER_NOT_FOUND",
+      });
+    }
   }
 
   const locationDoc = await createOrUpdateLocation(location);
@@ -172,7 +295,7 @@ const createShift = async (shiftData) => {
     title,
     role,
     typeOfShift,
-    user,
+    user: user || null,
     startTime: startDateTime,
     finishTime: finishDateTime,
     numOfShiftsPerDay,
@@ -588,6 +711,163 @@ const getUserShifts = async (userId, options = {}) => {
 };
 
 /**
+ * Get unassigned scheduled shifts available in the marketplace
+ * @param {Object} options - Query options
+ * @param {number} [options.page=1] - Page number
+ * @param {number} [options.limit=10] - Number of shifts per page
+ * @param {string} [options.role] - Filter by role
+ * @param {string} [options.date] - Filter by date
+ * @param {string} [options.typeOfShift] - Filter by shift type
+ * @returns {Promise<Object>} Paginated marketplace shifts with metadata
+ */
+const getMarketplaceShifts = async (options = {}) => {
+  const { role, date, typeOfShift, ...paginationOptions } = options;
+  const today = getUtcTodayStart();
+
+  const query = {
+    status: SHIFT_STATUS.SCHEDULED,
+    user: null,
+    date: { $gte: today },
+  };
+
+  if (role) {
+    query.role = role;
+  }
+
+  if (typeOfShift) {
+    query.typeOfShift = typeOfShift;
+  }
+
+  if (date) {
+    const { startOfDay, endOfDay } = getUtcDayRange(date);
+    query.date = { $gte: startOfDay, $lt: endOfDay };
+  }
+
+  return getShiftsWithPagination(query, paginationOptions);
+};
+
+/**
+ * Claim an open marketplace shift for a worker
+ * @param {string} shiftId - ID of the shift to claim
+ * @param {string} userId - ID of the worker claiming the shift
+ * @returns {Promise<{success: boolean, data: {shift: Object}, message: string}>} Claimed shift response
+ */
+const claimShift = async (shiftId, userId) => {
+  await getWorkerById(userId);
+
+  const shift = await ShiftModel.findById(shiftId);
+  if (!shift) {
+    throw new AppError({
+      message: "Shift not found",
+      statusCode: 404,
+      errorCode: "SHIFT_NOT_FOUND",
+    });
+  }
+
+  if (shift.user) {
+    throw new AppError({
+      message: "Shift already has an assigned worker",
+      statusCode: 400,
+      errorCode: "SHIFT_ALREADY_CLAIMED",
+    });
+  }
+
+  const today = getUtcTodayStart();
+  const now = getCurrentDateTime();
+  const visibleStartDateTime = getMarketplaceVisibleStartDateTime(shift);
+
+  if (
+    shift.status !== SHIFT_STATUS.SCHEDULED ||
+    shift.date < today ||
+    visibleStartDateTime <= now
+  ) {
+    throw new AppError({
+      message: "Shift is not available",
+      statusCode: 400,
+      errorCode: "SHIFT_NOT_AVAILABLE",
+    });
+  }
+
+  const updatedShift = await ShiftModel.findOneAndUpdate(
+    {
+      _id: shiftId,
+      user: null,
+      status: SHIFT_STATUS.SCHEDULED,
+      date: { $gte: today },
+    },
+    { user: userId },
+    { new: true, runValidators: true },
+  )
+    .populate("user", "name email role")
+    .populate(
+      "location",
+      "name postCode distance constituency adminDistrict cordinates address",
+    )
+    .exec();
+
+  if (!updatedShift) {
+    throw new AppError({
+      message: "Shift already has an assigned worker",
+      statusCode: 400,
+      errorCode: "SHIFT_ALREADY_CLAIMED",
+    });
+  }
+
+  return {
+    success: true,
+    data: {
+      shift: formatShiftForResponse(updatedShift),
+    },
+    message: "Shift claimed successfully",
+  };
+};
+
+/**
+ * Verify worker coordinates are within geofence of shift location
+ * @param {string} shiftId - Shift ID
+ * @param {string} userId - Authenticated worker ID
+ * @param {{latitude: number, longitude: number}} coordinates - Worker coordinates
+ * @returns {Promise<{withinRange: boolean, distanceMeters: number, radiusMeters: number}>}
+ */
+const verifyShiftLocation = async (shiftId, userId, coordinates) => {
+  await getWorkerById(userId);
+
+  const shift = await ShiftModel.findById(shiftId)
+    .populate("location", "cordinates")
+    .exec();
+
+  if (!shift) {
+    throw new AppError({
+      message: "Shift not found",
+      statusCode: 404,
+      errorCode: "SHIFT_NOT_FOUND",
+    });
+  }
+
+  if (!shift.location?.cordinates) {
+    throw new AppError({
+      message: "Shift location coordinates not found",
+      statusCode: 400,
+      errorCode: "SHIFT_LOCATION_NOT_FOUND",
+    });
+  }
+
+  const distanceMeters = calculateDistanceMeters(
+    coordinates.latitude,
+    coordinates.longitude,
+    shift.location.cordinates.latitude,
+    shift.location.cordinates.longitude,
+  );
+  const radiusMeters = GEOFENCE_RADIUS_METERS;
+
+  return {
+    withinRange: distanceMeters <= radiusMeters,
+    distanceMeters,
+    radiusMeters,
+  };
+};
+
+/**
  * Get shift by ID
  * @param {string} shiftId - ID of the shift
  * @returns {Promise<Object>} Shift object
@@ -624,5 +904,8 @@ export {
   clockOutShift,
   getAllShifts,
   getUserShifts,
+  getMarketplaceShifts,
+  claimShift,
+  verifyShiftLocation,
   getShift,
 };

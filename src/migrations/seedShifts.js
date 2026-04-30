@@ -3,6 +3,8 @@ import mongoose from "mongoose";
 import * as process from "node:process";
 import dotenv from "dotenv";
 import Shift from "../models/shifts.model.js";
+import { createShiftDateTimes } from "../utils/datetime.js";
+import { SHIFT_TYPES } from "../services/shift/constants.js";
 
 dotenv.config();
 
@@ -43,15 +45,24 @@ async function seed() {
 
         const dow = d.getDay();
         const typeOfShift =
-          dow === 0 || dow === 6 ? ["Weekends"] : ["Weekdays"];
+          dow === 0 || dow === 6
+            ? [SHIFT_TYPES.WEEKEND]
+            : [SHIFT_TYPES.WEEKDAY];
+        const startTime = "13:00";
+        const finishTime = "18:00";
+        const { startDateTime, finishDateTime } = createShiftDateTimes(
+          d,
+          startTime,
+          finishTime,
+        );
 
         seedData.push({
           title: "Short Day",
           role: "Support Worker",
           typeOfShift,
           user: userId,
-          startTime: "13:00",
-          finishTime: "18:00",
+          startTime: startDateTime,
+          finishTime: finishDateTime,
           numOfShiftsPerDay: 1,
           location: locationId,
           date: new Date(d),
