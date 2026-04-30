@@ -12,6 +12,25 @@ const OTP_EXPIRY_MINUTES = 5;
 const OTP_RESEND_COOLDOWN_SECONDS = 30;
 
 /**
+ * Normalize email input for storage and lookup
+ * @param {string} email
+ * @returns {string}
+ */
+const normalizeEmail = (email) => email.trim().toLowerCase();
+
+/**
+ * Find a user by email without treating casing as significant
+ * @param {string} email
+ * @returns {Promise<Object | null>} User document or null
+ */
+const findUserByEmail = async (email) => {
+  const normalizedEmail = normalizeEmail(email);
+  return UserModel.findOne({
+    email: { $regex: `^${normalizedEmail}$`, $options: "i" },
+  });
+};
+
+/**
  * Create JWT token for user using userId as payload
  * @param {string} userId
  * @returns {string} JWT token
@@ -72,7 +91,8 @@ const createAndSendOtp = async (user) => {
  * @throws {AppError} If user already exists
  */
 const registerUser = async (name, email, password) => {
-  const exists = await UserModel.findOne({ email });
+  const normalizedEmail = normalizeEmail(email);
+  const exists = await findUserByEmail(normalizedEmail);
   if (exists) {
     throw new AppError({
       message: "User already exists",
@@ -84,7 +104,11 @@ const registerUser = async (name, email, password) => {
   const salt = await bcrypt.genSalt(10);
   const hashedPassword = await bcrypt.hash(password, salt);
 
-  const newUser = new UserModel({ name, email, password: hashedPassword });
+  const newUser = new UserModel({
+    name,
+    email: normalizedEmail,
+    password: hashedPassword,
+  });
   const user = await newUser.save();
   const token = createJWTToken(user._id);
   return {
@@ -101,7 +125,7 @@ const registerUser = async (name, email, password) => {
  * @throws {AppError} If user does not exist
  */
 const loginUser = async (email, password) => {
-  const user = await UserModel.findOne({ email });
+  const user = await findUserByEmail(email);
 
   if (!user) {
     throw new AppError({
@@ -154,7 +178,7 @@ const getUser = async (id) => {
  * @throws {AppError} If user does not exist
  */
 const sendOtp = async (email) => {
-  const user = await UserModel.findOne({ email });
+  const user = await findUserByEmail(email);
 
   if (!user) {
     throw new AppError({
@@ -168,7 +192,7 @@ const sendOtp = async (email) => {
 
   return {
     success: true,
-    message: `OTP sent to ${email}`,
+    message: `OTP sent to ${user.email}`,
   };
 };
 
@@ -179,7 +203,7 @@ const sendOtp = async (email) => {
  * @throws {AppError} If user does not exist or resend is too soon
  */
 const resendOtp = async (email) => {
-  const user = await UserModel.findOne({ email });
+  const user = await findUserByEmail(email);
 
   if (!user) {
     throw new AppError({
@@ -209,7 +233,7 @@ const resendOtp = async (email) => {
 
   return {
     success: true,
-    message: `OTP sent to ${email}`,
+    message: `OTP sent to ${user.email}`,
   };
 };
 
@@ -222,7 +246,7 @@ const resendOtp = async (email) => {
  * @throws {ValidationError} If OTP is invalid or expired
  */
 const verifyOtp = async (email, otp) => {
-  const user = await UserModel.findOne({ email });
+  const user = await findUserByEmail(email);
 
   if (!user) {
     throw new AppError({
@@ -266,7 +290,7 @@ const verifyOtp = async (email, otp) => {
  * @throws {AppError} If user does not exist or email sending fails
  */
 const forgotPassword = async (email) => {
-  const user = await UserModel.findOne({ email });
+  const user = await findUserByEmail(email);
 
   if (!user) {
     throw new AppError({

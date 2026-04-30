@@ -56,6 +56,19 @@ describe("Authentication API", () => {
       expect(res.body.user.role).to.equal("worker");
     });
 
+    it("should normalize registered email to lowercase", async () => {
+      const res = await request(app)
+        .post("/api/user/register")
+        .send({
+          name: "Test User",
+          email: "Test@Example.com",
+          password: "TestPass123!",
+        })
+        .expect(200);
+
+      expect(res.body.user.email).to.equal("test@example.com");
+    });
+
     it("should return error for duplicate email", async () => {
       const userData = {
         name: "Test User",
@@ -139,6 +152,24 @@ describe("Authentication API", () => {
       expect(res.body).to.have.property("token");
       expect(res.body).to.have.property("user");
       expect(res.body.user.role).to.equal("worker");
+    });
+
+    it("should login with email regardless of case", async () => {
+      await UserModel.updateOne(
+        { email: "test@example.com" },
+        { email: "Test@Example.com" },
+      );
+
+      const res = await request(app)
+        .post("/api/user/login")
+        .send({
+          email: "test@example.com",
+          password: "TestPass123!",
+        })
+        .expect(200);
+
+      expect(res.body).to.have.property("token");
+      expect(res.body.user.email).to.equal("Test@Example.com");
     });
 
     it("should return error for non-existent user", async () => {
@@ -228,6 +259,22 @@ describe("Authentication API", () => {
     });
 
     it("should send password reset email for existing user", async () => {
+      const res = await request(app)
+        .post("/api/user/forgotPassword")
+        .send({
+          email: "test@example.com",
+        })
+        .expect(200);
+
+      expect(res.body.message).to.include("reset your password");
+    });
+
+    it("should send password reset email regardless of email case", async () => {
+      await UserModel.updateOne(
+        { email: "test@example.com" },
+        { email: "Test@Example.com" },
+      );
+
       const res = await request(app)
         .post("/api/user/forgotPassword")
         .send({
@@ -351,6 +398,23 @@ describe("Authentication API", () => {
         expect(user.isEmailVerified).to.equal(false);
       });
 
+      it("should send an OTP regardless of email case", async () => {
+        await UserModel.updateOne(
+          { email: userData.email },
+          { email: "Test@Example.com" },
+        );
+
+        const res = await request(app)
+          .post("/api/auth/send-otp")
+          .send({ email: "test@example.com" })
+          .expect(200);
+
+        expect(res.body).to.deep.equal({
+          success: true,
+          message: "OTP sent to Test@Example.com",
+        });
+      });
+
       it("should return USER_NOT_FOUND for a missing user", async () => {
         const res = await request(app)
           .post("/api/auth/send-otp")
@@ -386,6 +450,21 @@ describe("Authentication API", () => {
         expect(user.isEmailVerified).to.equal(true);
         expect(user.otpHash).to.equal(null);
         expect(user.otpExpiry).to.equal(null);
+      });
+
+      it("should verify a valid OTP regardless of email case", async () => {
+        await UserModel.updateOne(
+          { email: userData.email },
+          { email: "Test@Example.com" },
+        );
+
+        const res = await request(app)
+          .post("/api/auth/verify-otp")
+          .send({ email: "test@example.com", otp: "123456" })
+          .expect(200);
+
+        expect(res.body.success).to.equal(true);
+        expect(res.body.user.email).to.equal("Test@Example.com");
       });
 
       it("should return INVALID_OTP for an incorrect OTP", async () => {
