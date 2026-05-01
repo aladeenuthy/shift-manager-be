@@ -225,7 +225,6 @@ router.get(
  *               - title
  *               - role
  *               - typeOfShift
- *               - user
  *               - startTime
  *               - finishTime
  *               - location
@@ -245,7 +244,8 @@ router.get(
  *                 description: Types of shift (at least one required)
  *               user:
  *                 type: string
- *                 description: ID of the user assigned to the shift
+ *                 nullable: true
+ *                 description: Optional ID of the worker assigned to the shift. Omit or pass null to create an unassigned marketplace shift.
  *               startTime:
  *                 type: string
  *                 pattern: "^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$"
@@ -349,7 +349,6 @@ router.post(
  *                     - title
  *                     - role
  *                     - typeOfShift
- *                     - user
  *                     - startTime
  *                     - finishTime
  *                     - location
@@ -372,7 +371,8 @@ router.post(
  *                       description: Types of shift (at least one required)
  *                     user:
  *                       type: string
- *                       description: ID of the user assigned to the shift
+ *                       nullable: true
+ *                       description: Optional ID of the worker assigned to the shift. Omit or pass null to create an unassigned marketplace shift.
  *                     startTime:
  *                       type: string
  *                       pattern: "^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$"
@@ -496,7 +496,8 @@ router.post(
  *                 description: Types of shift (at least one required)
  *               user:
  *                 type: string
- *                 description: ID of the user assigned to the shift
+ *                 nullable: true
+ *                 description: Optional ID of the worker assigned to the shift. Use null to leave the shift unassigned.
  *               startTime:
  *                 type: string
  *                 pattern: "^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$"
