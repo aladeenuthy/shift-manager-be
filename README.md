@@ -1,3 +1,170 @@
+# Branch Changes: Bonus Feature Implementation
+
+This branch extends the backend with the requested bonus features while following the existing project structure:
+
+- Route -> controller -> service -> model
+- Zod validation at controller boundaries
+- AppError/ValidationError-style error handling
+- Swagger JSDoc documentation in route files
+- New routers registered through `src/server.js`
+
+## Email OTP Verification
+
+Added email OTP verification flow for workers after registration.
+
+- Added OTP fields to the User model:
+  - `otpHash`
+  - `otpExpiry`
+  - `otpLastSentAt`
+  - `isEmailVerified`
+- Added public auth endpoints:
+  - `POST /api/auth/send-otp`
+  - `POST /api/auth/verify-otp`
+  - `POST /api/auth/resend-otp`
+- OTPs are bcrypt-hashed before storage.
+- OTP expiry is set to 5 minutes.
+- Resend OTP is rate-limited to once every 30 seconds per email.
+- Verify OTP marks the user as verified and returns a JWT.
+- Added Swagger docs and tests for the OTP flow.
+- Fixed email lookup behavior so login and forgot-password can find users regardless of email casing.
+
+## Worker Profile Setup
+
+Added worker profile setup APIs.
+
+- Added profile-related User fields:
+  - `phone`
+  - `city`
+  - `jobRole`
+  - `skills`
+  - `profilePictureUrl`
+  - `isProfileComplete`
+- Added worker profile endpoints:
+  - `GET /api/workers/profile`
+  - `PATCH /api/workers/profile`
+- Profile update supports optional fields including:
+  - `name`
+  - `phone`
+  - `city`
+  - `jobRole`
+  - `skills`
+- `isProfileComplete` is automatically set when `phone`, `city`, and `jobRole` are all present.
+- Removed the old admin worker listing endpoint from the worker router.
+- Added Swagger docs and tests.
+
+## Availability
+
+Added weekly recurring availability support for workers.
+
+- Added `Availability` model with:
+  - `user`
+  - `weeklySchedule`
+  - `day`
+  - `isAvailable`
+  - `startTime`
+  - `endTime`
+- Added endpoints:
+  - `POST /api/workers/availability`
+  - `GET /api/workers/availability`
+- Validates day names and HH:MM time format.
+- Stores one recurring weekly schedule per worker.
+- Added Swagger docs and tests.
+
+## Unavailability
+
+Added date-specific unavailability management for workers.
+
+- Added `Unavailability` model with:
+  - `user`
+  - `startDate`
+  - `endDate`
+  - `reason`
+- Added endpoints:
+  - `POST /api/workers/unavailability`
+  - `GET /api/workers/unavailability`
+  - `DELETE /api/workers/unavailability/:id`
+- Supports optional `?month=YYYY-MM` filtering.
+- Validates:
+  - `startDate <= endDate`
+  - Dates cannot be in the past
+  - Workers can only delete their own entries
+- Added Swagger docs and tests.
+
+## Shift Marketplace
+
+Added marketplace support for unassigned shifts.
+
+- Updated Shift model so `user` is optional and defaults to `null`.
+- Added endpoint:
+  - `GET /api/shifts/marketplace`
+- Marketplace returns only eligible shifts:
+  - `status === Scheduled`
+  - `user === null`
+  - Shift date/time has not passed
+- Supports pagination and filters:
+  - `page`
+  - `limit`
+  - `role`
+  - `date`
+  - `typeOfShift`
+- Added endpoint:
+  - `PATCH /api/shifts/:id/claim`
+- Claiming a shift validates:
+  - Shift exists
+  - Shift is unassigned
+  - Shift is scheduled
+  - Shift start date/time has not passed
+- Added Swagger docs and tests.
+
+## Server-Side Geofence Verification
+
+Added backend geofence verification for shift clock-in support.
+
+- Added endpoint:
+  - `POST /api/shifts/:id/verify-location`
+- Uses the Haversine formula to calculate worker distance from shift coordinates.
+- Default radius is 200 meters.
+- Radius can be configured with `GEOFENCE_RADIUS_METERS`.
+- Returns success when the worker is within range.
+- Returns `OUTSIDE_GEOFENCE` when the worker is outside the allowed radius.
+- Added Swagger docs and tests.
+
+## Shift Date/Time Handling
+
+Improved shift date/time handling to reduce timezone-related marketplace and claim issues.
+
+- Unified shift seed date/time creation through shared date utilities.
+- Updated shift seed script to use valid shift type constants.
+- Added marketplace claim protection for shifts whose date/time has already passed.
+- Fixed marketplace date filtering so date-only filters match the intended day.
+
+## Server/Test Setup
+
+- Updated `src/server.js` so the Express app can be imported during tests without automatically starting the server.
+- Added `startServer()` for non-test runtime startup.
+- Registered the new `/api/auth` router.
+- Added Swagger tag for the new auth endpoints.
+
+## Tests Added/Updated
+
+Added or updated tests for:
+
+- OTP send, resend, and verify flows
+- Worker profile setup
+- Worker availability
+- Worker unavailability
+- Shift marketplace listing
+- Shift claiming
+- Shift geofence verification
+
+## Notes
+
+- `user` is now optional/nullable in shift creation Swagger docs to support unassigned marketplace shifts.
+- Existing assigned-shift behavior is preserved.
+- Marketplace shifts are created by omitting `user` or passing `user: null`.
+
+---
+
 # Shift Manager Backend API
 
 This is the backend system for the **Shift Manager** application, built with **Node.js**, **Express**, and **MongoDB**. It supports:
